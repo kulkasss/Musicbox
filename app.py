@@ -1,14 +1,21 @@
-from flask import Flask, render_template, request, redirect, url_for
+from flask import Flask, render_template, request, redirect, url_for, flash
+from flask_login import login_user, logout_user, LoginManager
+from werkzeug.security import check_password_hash, generate_password_hash
+
 from werkzeug.utils import secure_filename
 import os
-
-from models import db, Song, Artist
 from config import Config
-
+from models import db, Song, User
+from admin import admin
+from forms import LoginForm, RegistrationForm
 
 app = Flask(__name__)
 app.config.from_object(Config)
 db.init_app(app)
+admin.init_app(app)
+login_manager = LoginManager()
+login_manager.login_view = "login"
+login_manager.init_app(app)
 
 with app.app_context():
     db.create_all()
@@ -17,51 +24,66 @@ with app.app_context():
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in Config.ALLOWED_EXTENSIONS
 
+# Функція завантаження користувача
+@login_manager.user_loader
+def load_user(user_id):
+    return User.query.get(int(user_id))
+
 
 @app.route("/")
 def index():
-    Song = Song.query.all()
+    song = Song.query.all()
     return render_template("index.html", song=song)
 
-@app.route("/add", methods=["POST"])
-def add_song():
-    title = request.form.get("title", "").strip()
-    author = request.form.get("a", "").strip()
-    file = request.files.getlist("file")
-    filename = secure_filename(file.filename)
-    if title and file and allowed_file(file.filename):
-        new_song = Song(title=title, )
-            # На випадок, якщо ми маємо кілька файлів з однаковими іменами
-            # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            # name = f"{timestamp}_{name}"
 
-            file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-            if not os.path.exists(app.config['UPLOAD_FOLDER']):
-                os.makedirs(app.config['UPLOAD_FOLDER'])
+@app.route("/register", methods=["GET", "POST"])
+def register():
+    form = RegistrationForm()
 
-            file.save(file_path)
-            db.session.add(new_file)
+    if form.validate_on_submit():
+        # Перевіряємо, чи існує користувач з таким логіном
+        existing_user = User.query.filter_by(
+            username=form.username.data
+        ).first()
+        if existing_user:
+            flash("Користувач з таким ім'ям вже існує!", "danger")
+            return redirect(url_for("register"))
 
-        db.session.add(new_song)
+        hashed_password = generate_password_hash(form.password.data)
+        user = User(username=form.username.data, password=hashed_password)
+
+        db.session.add(user)
         db.session.commit()
-    return redirect(url_for("index"))
 
-@app.route("/delete/<int:task_id>")
-def delete_task(task_id):
-    task = Song.query.get(task_id)
-    if task:
-        db.session.delete(task)
-        db.session.commit()
-    return redirect(url_for("index"))
+        flash("Реєстрація пройшла успішно!", "success")
+        login_user(user)
+        return redirect(url_for("admin.index"))
 
-@app.route("/edit/<int:task_id>", methods=["GET", "POST"])
-def edit_task(task_id):
-    task = Task.query.get(task_id)
-    if task and request.method == "POST":
-        task.title = request.form.get("title", "").strip()
-        if task.title:
-            db.session.commit()
-            return redirect(url_for("index"))
-    return render_template("edit.html", task=task)
+    return render_template("register.html", form=form)
 
 
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    form = LoginForm()
+
+    if form.validate_on_submit():
+        user = User.query.filter_by(username=form.username.data).first()
+        if user and check_password_hash(user.password, form.password.data):
+            login_user(user)
+            flash("Успішний вхід!", "success")
+            return redirect(url_for("admin.index"))
+
+        flash("Невірний логін або пароль", "danger")
+
+    return render_template("login.html", form=form)
+
+
+# Сторінка виходу
+@app.route("/logout")
+def logout():
+    logout_user()
+    return redirect(url_for("home"))
+
+
+if __name__ == "__main__":
+    app.run(debug=True)
